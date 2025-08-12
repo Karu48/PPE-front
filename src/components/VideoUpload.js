@@ -18,6 +18,11 @@ const VideoUpload = () => {
   // Configuration for frame extraction
   const FRAME_INTERVAL = 1;
 
+  // Detection parameters (tweakable from the UI)
+  const [detectionMethod, setDetectionMethod] = useState("any"); // 'any' | 'percentage'
+  const [windowSizeSeconds, setWindowSizeSeconds] = useState(3); // seconds
+  const [percentageThreshold, setPercentageThreshold] = useState(50); // only for 'percentage'
+
   // Extract frames from video at regular intervals
   const extractFrames = async (videoBlob) => {
     return new Promise((resolve) => {
@@ -194,106 +199,9 @@ const VideoUpload = () => {
     }
   };
 
-  const getAlerts = () => {
-    const alerts = [];
-    const personAlerts = {}; // Track consecutive alerts per person
-    
-    // Group results by timestamp and check for consecutive alerts
-    analysisResults.forEach(result => {
-      result.result.Persons.forEach(person => {
-        const mappedPerson = ppeMapper(person);
-        const personKey = `person_${person.Id}`;
-        
-        if (mappedPerson.hasAlarm) {
-          if (!personAlerts[personKey]) {
-            personAlerts[personKey] = {
-              startTime: result.timestamp,
-              consecutiveFrames: 1,
-              lastFrameTime: result.timestamp
-            };
-          } else {
-            // Check if this is a consecutive frame (within 1.5 seconds)
-            if (result.timestamp - personAlerts[personKey].lastFrameTime <= 1.5) {
-              personAlerts[personKey].consecutiveFrames++;
-              personAlerts[personKey].lastFrameTime = result.timestamp;
-            } else {
-              // Reset if gap is too large
-              personAlerts[personKey] = {
-                startTime: result.timestamp,
-                consecutiveFrames: 1,
-                lastFrameTime: result.timestamp
-              };
-            }
-          }
-        } else {
-          // Reset if person is compliant
-          delete personAlerts[personKey];
-        }
-      });
-    });
-    
-    // Only create alerts for persons with enough consecutive frames
-    Object.entries(personAlerts).forEach(([personKey, alertData]) => {
-      const requiredFrames = Math.ceil(3 / FRAME_INTERVAL); // 3 second delay
-      
-      if (alertData.consecutiveFrames >= requiredFrames) {
-        // Find the first frame that triggered this alert
-        const alertFrame = analysisResults.find(result => 
-          result.timestamp >= alertData.startTime && 
-          result.result.Persons.some(person => 
-            person.Id.toString() === personKey.split('_')[1] && 
-            ppeMapper(person).hasAlarm
-          )
-        );
-        
-        if (alertFrame) {
-          alerts.push({
-            timestamp: alertData.startTime,
-            time: alertData.startTime * 1000,
-            result: alertFrame.result,
-            duration: alertData.consecutiveFrames * FRAME_INTERVAL
-          });
-        }
-      }
-    });
-    
-    // Consolidate overlapping alerts (within 2 seconds of each other)
-    const consolidatedAlerts = [];
-    
-    alerts.sort((a, b) => a.timestamp - b.timestamp);
-    
-    alerts.forEach(alert => {
-      // Check if this alert overlaps with any already processed
-      const isOverlapping = consolidatedAlerts.some(existingAlert => {
-        const existingStart = existingAlert.timestamp;
-        const existingEnd = existingStart + existingAlert.duration;
-        const newStart = alert.timestamp;
-        const newEnd = newStart + alert.duration;
-        
-        // Check if the time ranges overlap
-        return (newStart < existingEnd && newEnd > existingStart);
-      });
-      
-      if (!isOverlapping) {
-        consolidatedAlerts.push(alert);
-      }
-    });
-    
-    return consolidatedAlerts;
-  };
+  // Timeline aggregation removed
 
-  const formatTime = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  const handleTimelineClick = (timestamp) => {
-    if (videoRef.current) {
-      videoRef.current.currentTime = timestamp;
-      setCurrentTime(timestamp);
-    }
-  };
+  // Timeline utilities removed
 
 
 
@@ -317,6 +225,52 @@ const VideoUpload = () => {
 
   return (
     <div style={{ padding: "20px" }}>
+      {/* Controls */}
+      <Card style={{ marginBottom: "20px" }}>
+        <Card.Header>
+          <strong>Parámetros de Detección</strong>
+        </Card.Header>
+        <Card.Body>
+          <Row>
+            <Col md={4} sm={12} style={{ marginBottom: 12 }}>
+              <label style={{ display: "block", fontWeight: 600 }}>Método</label>
+              <select
+                className="form-control"
+                value={detectionMethod}
+                onChange={(e) => setDetectionMethod(e.target.value)}
+              >
+                <option value="any">Al menos una detección</option>
+                <option value="percentage">% de detecciones en ventana</option>
+              </select>
+            </Col>
+            <Col md={4} sm={12} style={{ marginBottom: 12 }}>
+              <label style={{ display: "block", fontWeight: 600 }}>Tamaño de ventana (seg)</label>
+              <input
+                type="number"
+                min={0.5}
+                step={0.5}
+                className="form-control"
+                value={windowSizeSeconds}
+                onChange={(e) => setWindowSizeSeconds(Number(e.target.value))}
+              />
+            </Col>
+            {detectionMethod === "percentage" && (
+              <Col md={4} sm={12} style={{ marginBottom: 12 }}>
+                <label style={{ display: "block", fontWeight: 600 }}>Umbral (%)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  step={1}
+                  className="form-control"
+                  value={percentageThreshold}
+                  onChange={(e) => setPercentageThreshold(Number(e.target.value))}
+                />
+              </Col>
+            )}
+          </Row>
+        </Card.Body>
+      </Card>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
         <h2>Análisis de Video EPP</h2>
         {videoFile && (
@@ -372,51 +326,7 @@ const VideoUpload = () => {
         </Card>
       )}
 
-      {/* Timeline */}
-      {analysisResults.length > 0 && (
-        <Card style={{ marginBottom: "20px" }}>
-          <Card.Header>
-            <strong>Timeline de Alertas</strong>
-            <span style={{ marginLeft: "10px", fontSize: "0.9em", color: "#6c757d" }}>
-              {getAlerts().length} alertas detectadas
-            </span>
-          </Card.Header>
-          <Card.Body>
-            <div style={{ 
-              display: "flex", 
-              overflowX: "auto", 
-              padding: "10px",
-              backgroundColor: "#f8f9fa",
-              borderRadius: "4px"
-            }}>
-              {getAlerts().map((alert, index) => (
-                <div
-                  key={index}
-                  onClick={() => handleTimelineClick(alert.timestamp)}
-                  style={{
-                    cursor: "pointer",
-                    padding: "8px 12px",
-                    margin: "0 4px",
-                    backgroundColor: "#dc3545",
-                    color: "white",
-                    borderRadius: "4px",
-                    fontSize: "0.9em",
-                    whiteSpace: "nowrap"
-                  }}
-                  title={`Duración: ${alert.duration}s`}
-                >
-                  🚨 {formatTime(alert.timestamp)}
-                  {alert.duration > 1 && (
-                    <span style={{ fontSize: "0.8em", opacity: 0.9 }}>
-                      ({alert.duration}s)
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
-          </Card.Body>
-        </Card>
-      )}
+      {/* Timeline removed */}
 
       {/* Video and Analysis Layout */}
       {videoFile && (
@@ -425,9 +335,12 @@ const VideoUpload = () => {
             {/* PPE Chart */}
             {analysisResults.length > 0 ? (
               <PPEChart 
-                key={`chart-${Math.round(currentTime)}`}
+                key={`chart-${Math.round(currentTime)}-${detectionMethod}-${windowSizeSeconds}-${percentageThreshold}`}
                 analysisResults={analysisResults}
                 currentTime={currentTime}
+                detectionMethod={detectionMethod}
+                windowSizeSeconds={windowSizeSeconds}
+                percentageThreshold={percentageThreshold}
               />
             ) : (
               <Card>

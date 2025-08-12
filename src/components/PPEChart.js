@@ -1,78 +1,112 @@
 import React from "react";
 import { Card, Table } from "react-bootstrap";
 
-const PPEChart = ({ analysisResults, currentTime }) => {
-  // Get current 5-second window results
+const PPEChart = ({ 
+  analysisResults, 
+  currentTime,
+  detectionMethod = "any", // 'any' | 'percentage'
+  windowSizeSeconds = 3,
+  percentageThreshold = 50,
+}) => {
+  // Compute aggregated results for the current configurable window
   const getCurrentWindowResults = () => {
-    const windowStart = Math.floor(currentTime / 3) * 3; // 3-second windows
-    const windowEnd = windowStart + 3;
-    
-    // Get all results within the current 5-second window
-    const windowResults = analysisResults.filter(result => 
-      result.timestamp >= windowStart && result.timestamp < windowEnd
+    const ws = Math.max(0.5, Number(windowSizeSeconds) || 3);
+    const windowStart = Math.floor(currentTime / ws) * ws;
+    const windowEnd = windowStart + ws;
+
+    const windowResults = analysisResults.filter(
+      (result) => result.timestamp >= windowStart && result.timestamp < windowEnd
     );
-    
-    if (windowResults.length === 0) {
-      return { Persons: [] };
-    }
-    
-    // Count how many times each person appears in the window
-    const personCounts = {};
-    const personData = {};
-    
-    windowResults.forEach(result => {
-      result.result.Persons.forEach(person => {
-        const personId = person.Id;
-        if (!personCounts[personId]) {
-          personCounts[personId] = 0;
-          personData[personId] = { bodyParts: {} };
-        }
-        personCounts[personId]++;
-        // Track PPE detection for this person (union of all frames)
-        person.BodyParts.forEach(bodyPart => {
-          if (!personData[personId].bodyParts[bodyPart.Name]) {
-            personData[personId].bodyParts[bodyPart.Name] = new Set();
-          }
-          bodyPart.EquipmentDetections.forEach(equipment => {
-            personData[personId].bodyParts[bodyPart.Name].add(equipment.Type);
-          });
+
+    if (windowResults.length === 0) return { Persons: [] };
+
+    // Collect per-person counts across frames in the window
+    const personAppearances = new Map(); // personId -> frames appeared
+    const ppeCounts = new Map(); // personId -> { ppeType -> count frames with that PPE }
+
+    const hasPPEInFrame = (person, ppeType) => {
+      const findPart = (name) => person.BodyParts && person.BodyParts.find((bp) => bp.Name === name);
+      if (ppeType === "LEFT_GLOVE") {
+        const left = findPart("LEFT_HAND");
+        return (
+          !!left &&
+          Array.isArray(left.EquipmentDetections) &&
+          left.EquipmentDetections.some((eq) => eq.Type === "GLOVE" || eq.Type === "HAND_COVER")
+        );
+      }
+      if (ppeType === "RIGHT_GLOVE") {
+        const right = findPart("RIGHT_HAND");
+        return (
+          !!right &&
+          Array.isArray(right.EquipmentDetections) &&
+          right.EquipmentDetections.some((eq) => eq.Type === "GLOVE" || eq.Type === "HAND_COVER")
+        );
+      }
+      if (ppeType === "MASK") {
+        const face = findPart("FACE");
+        return (
+          !!face &&
+          Array.isArray(face.EquipmentDetections) &&
+          face.EquipmentDetections.some((eq) => eq.Type === "MASK" || eq.Type === "FACE_COVER")
+        );
+      }
+      if (ppeType === "HELMET") {
+        const head = findPart("HEAD");
+        return (
+          !!head &&
+          Array.isArray(head.EquipmentDetections) &&
+          head.EquipmentDetections.some((eq) => eq.Type === "HELMET" || eq.Type === "HEAD_COVER")
+        );
+      }
+      return false;
+    };
+
+    const ppeTypes = ["MASK", "HELMET", "LEFT_GLOVE", "RIGHT_GLOVE"];
+
+    windowResults.forEach((result) => {
+      result.result.Persons.forEach((person) => {
+        const pid = person.Id;
+        personAppearances.set(pid, (personAppearances.get(pid) || 0) + 1);
+        const counts = ppeCounts.get(pid) || { MASK: 0, HELMET: 0, LEFT_GLOVE: 0, RIGHT_GLOVE: 0 };
+        ppeTypes.forEach((t) => {
+          if (hasPPEInFrame(person, t)) counts[t] += 1;
         });
+        ppeCounts.set(pid, counts);
       });
     });
-    
-    // Only include people who appear in more than half the frames
-    const minFrames = Math.ceil(windowResults.length / 2);
-    const reliablePersons = Object.entries(personCounts)
-      .filter(([personId, count]) => count > minFrames)
-      .map(([personId, count]) => {
-        const person = {
-          Id: personId,
-          BodyParts: Object.entries(personData[personId].bodyParts).map(([bodyPartName, equipmentSet]) => ({
-            Name: bodyPartName,
-            EquipmentDetections: Array.from(equipmentSet).map(equipmentType => ({
-              Type: equipmentType,
-              Confidence: 100 // Mark as present if detected in any frame
-            }))
-          }))
-        };
-        return person;
+
+    // Build aggregated person list with PPE presence according to method/threshold
+    const aggregatedPersons = Array.from(personAppearances.entries()).map(([pid, appearances]) => {
+      const counts = ppeCounts.get(pid) || { MASK: 0, HELMET: 0, LEFT_GLOVE: 0, RIGHT_GLOVE: 0 };
+      const presence = {};
+      ppeTypes.forEach((t) => {
+        const percent = (counts[t] / appearances) * 100;
+        presence[t] = detectionMethod === "any" ? counts[t] > 0 : percent >= (Number(percentageThreshold) || 0);
       });
-    
-    return { Persons: reliablePersons };
+
+      // Convert presence booleans back to a BodyParts structure compatible with the table rendering
+      const bodyParts = [];
+      if (presence.MASK) {
+        bodyParts.push({ Name: "FACE", EquipmentDetections: [{ Type: "MASK", Confidence: 100 }] });
+      }
+      if (presence.HELMET) {
+        bodyParts.push({ Name: "HEAD", EquipmentDetections: [{ Type: "HELMET", Confidence: 100 }] });
+      }
+      if (presence.LEFT_GLOVE) {
+        bodyParts.push({ Name: "LEFT_HAND", EquipmentDetections: [{ Type: "GLOVE", Confidence: 100 }] });
+      }
+      if (presence.RIGHT_GLOVE) {
+        bodyParts.push({ Name: "RIGHT_HAND", EquipmentDetections: [{ Type: "GLOVE", Confidence: 100 }] });
+      }
+
+      return { Id: pid, BodyParts: bodyParts };
+    });
+
+    return { Persons: aggregatedPersons, windowStart, windowEnd };
   };
 
   // Get all unique PPE types from current frame only
-  const getAllPPETypes = () => {
-    // Only consider the three specific PPE types with separate gloves
-    const requiredPPETypes = [
-      "MASK",
-      "HELMET",
-      "LEFT_GLOVE",
-      "RIGHT_GLOVE"
-    ];
-    
-    return requiredPPETypes;
-  };
+  const getAllPPETypes = () => ["MASK", "HELMET", "LEFT_GLOVE", "RIGHT_GLOVE"];
 
   // Get Spanish title for PPE type
   const getSpanishTitle = (ppeType) => {
@@ -85,41 +119,20 @@ const PPEChart = ({ analysisResults, currentTime }) => {
     return titles[ppeType] || ppeType;
   };
 
-  // Check if a person has a specific PPE type
+  // Check if a person has a specific PPE type (simplified, uses aggregated BodyParts)
   const hasPPE = (person, ppeType) => {
-    // Debug logging
-    console.log('Checking PPE:', ppeType, 'for person:', person.Id);
-    console.log('Person body parts:', person.BodyParts);
-    
     if (ppeType === "LEFT_GLOVE") {
-      const leftHand = person.BodyParts.find(bp => bp.Name === "LEFT_HAND");
-      const hasGlove = leftHand && leftHand.EquipmentDetections && leftHand.EquipmentDetections.some(eq => 
-        eq.Type === "GLOVE" || eq.Type === "HAND_COVER"
-      );
-      console.log('LEFT_GLOVE check:', hasGlove, leftHand);
-      return hasGlove;
+      const leftHand = person.BodyParts.find((bp) => bp.Name === "LEFT_HAND");
+      return !!(leftHand && leftHand.EquipmentDetections && leftHand.EquipmentDetections.some((eq) => eq.Type === "GLOVE" || eq.Type === "HAND_COVER"));
     } else if (ppeType === "RIGHT_GLOVE") {
-      const rightHand = person.BodyParts.find(bp => bp.Name === "RIGHT_HAND");
-      const hasGlove = rightHand && rightHand.EquipmentDetections && rightHand.EquipmentDetections.some(eq => 
-        eq.Type === "GLOVE" || eq.Type === "HAND_COVER"
-      );
-      console.log('RIGHT_GLOVE check:', hasGlove, rightHand);
-      return hasGlove;
+      const rightHand = person.BodyParts.find((bp) => bp.Name === "RIGHT_HAND");
+      return !!(rightHand && rightHand.EquipmentDetections && rightHand.EquipmentDetections.some((eq) => eq.Type === "GLOVE" || eq.Type === "HAND_COVER"));
     } else if (ppeType === "MASK") {
-      const face = person.BodyParts.find(bp => bp.Name === "FACE");
-      const hasMask = face && face.EquipmentDetections && face.EquipmentDetections.some(eq => 
-        eq.Type === "MASK" || eq.Type === "FACE_COVER"
-      );
-      console.log('MASK check:', hasMask, face);
-      return hasMask;
+      const face = person.BodyParts.find((bp) => bp.Name === "FACE");
+      return !!(face && face.EquipmentDetections && face.EquipmentDetections.some((eq) => eq.Type === "MASK" || eq.Type === "FACE_COVER"));
     } else if (ppeType === "HELMET") {
-      const head = person.BodyParts.find(bp => bp.Name === "HEAD");
-      // Check for both HELMET and HEAD_COVER
-      const hasHelmet = head && head.EquipmentDetections && head.EquipmentDetections.some(eq => 
-        eq.Type === "HELMET" || eq.Type === "HEAD_COVER"
-      );
-      console.log('HELMET check:', hasHelmet, head);
-      return hasHelmet;
+      const head = person.BodyParts.find((bp) => bp.Name === "HEAD");
+      return !!(head && head.EquipmentDetections && head.EquipmentDetections.some((eq) => eq.Type === "HELMET" || eq.Type === "HEAD_COVER"));
     }
     return false;
   };
@@ -132,12 +145,9 @@ const PPEChart = ({ analysisResults, currentTime }) => {
   const currentResults = getCurrentWindowResults();
   const allPPETypes = getAllPPETypes();
 
-  // Debug logging for current results
-  const windowStart = Math.floor(currentTime / 3) * 3;
-  console.log('Current 5-second window:', windowStart, 'to', windowStart + 3);
-  console.log('Current results:', currentResults);
-  console.log('All PPE types:', allPPETypes);
-  console.log('Number of persons:', currentResults.Persons.length);
+  // Window info (for header display)
+  const ws = Math.max(0.5, Number(windowSizeSeconds) || 3);
+  const windowStart = Math.floor(currentTime / ws) * ws;
 
   // Only show chart if there are people detected
   if (currentResults.Persons.length === 0) {
@@ -164,7 +174,7 @@ const PPEChart = ({ analysisResults, currentTime }) => {
         </span>
         <br />
         <small style={{ color: "#6c757d" }}>
-          Ventana de 3s: {windowStart}s - {windowStart + 3}s
+          Ventana de {ws}s: {windowStart}s - {windowStart + ws}s
         </small>
       </Card.Header>
       <Card.Body>
