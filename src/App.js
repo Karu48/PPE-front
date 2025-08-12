@@ -3,7 +3,7 @@ import { findDOMNode } from "react-dom";
 import { AmplifyAuthenticator, AmplifySignIn } from "@aws-amplify/ui-react/legacy";
 import { onAuthUIStateChange } from "@aws-amplify/ui-components";
 import Webcam from "react-webcam";
-import { Alert, Col, Row, Nav, Navbar } from "react-bootstrap";
+import { Alert, Col, Row, Nav, Navbar, Card } from "react-bootstrap";
 
 import gateway from "./utils/gateway";
 import { ppeMapper } from "./utils/ppe";
@@ -25,6 +25,12 @@ const App = () => {
   const [activeMode, setActiveMode] = useState("live");
   const iterating = useRef(false);
   const webcam = useRef(undefined);
+  const resultsBufferRef = useRef([]);
+
+  // Live detection parameters
+  const [liveDetectionMethod, setLiveDetectionMethod] = useState("any"); // 'any' | 'percentage'
+  const [liveWindowSizeSeconds, setLiveWindowSizeSeconds] = useState(3);
+  const [livePercentageThreshold, setLivePercentageThreshold] = useState(50);
 
   const getSnapshot = async () => {
     setWebcamCoordinates(findDOMNode(webcam.current).getBoundingClientRect());
@@ -34,7 +40,32 @@ const App = () => {
     try {
       const result = await gateway.processImage(b64Encoded);
       const people = result.Persons.map(ppeMapper);
-      setTestResults(people);
+
+      // Buffer recent frame outcomes
+      const now = Date.now() / 1000;
+      const hasAlarmFrame = people.some((p) => p.hasAlarm);
+      const buffer = resultsBufferRef.current;
+      buffer.push({ t: now, hasAlarm: hasAlarmFrame });
+      // Keep a reasonable history (at least up to 2x current window, min 30s)
+      const maxKeep = Math.max(30, (Number(liveWindowSizeSeconds) || 3) * 2);
+      while (buffer.length && buffer[0].t < now - maxKeep) buffer.shift();
+
+      // Compute decision over the last N seconds
+      const windowSize = Math.max(0.5, Number(liveWindowSizeSeconds) || 3);
+      const windowFrames = buffer.filter((x) => x.t >= now - windowSize);
+      let shouldShow = true;
+      if (windowFrames.length > 0) {
+        if (liveDetectionMethod === "any") {
+          shouldShow = windowFrames.some((x) => x.hasAlarm);
+        } else {
+          const positives = windowFrames.filter((x) => x.hasAlarm).length;
+          const percent = (positives / windowFrames.length) * 100;
+          shouldShow = percent >= (Number(livePercentageThreshold) || 0);
+        }
+      }
+
+      setTestResults(shouldShow ? people : []);
+
       if (iterating.current) setTimeout(getSnapshot, 300);
       else setTestResults([]);
     } catch (e) {
@@ -91,6 +122,50 @@ const App = () => {
           />
         </Col>
         <Col md={4} sm={6}>
+          {/* Live detection parameters */}
+          <Card style={{ marginBottom: "10px" }}>
+            <Card.Header>
+              <strong>Parámetros (Cámara en Vivo)</strong>
+            </Card.Header>
+            <Card.Body>
+              <div style={{ marginBottom: 10 }}>
+                <label style={{ display: "block", fontWeight: 600 }}>Método</label>
+                <select
+                  className="form-control"
+                  value={liveDetectionMethod}
+                  onChange={(e) => setLiveDetectionMethod(e.target.value)}
+                >
+                  <option value="any">Al menos una detección</option>
+                  <option value="percentage">% de detecciones en ventana</option>
+                </select>
+              </div>
+              <div style={{ marginBottom: 10 }}>
+                <label style={{ display: "block", fontWeight: 600 }}>Tamaño de ventana (seg)</label>
+                <input
+                  type="number"
+                  min={0.5}
+                  step={0.5}
+                  className="form-control"
+                  value={liveWindowSizeSeconds}
+                  onChange={(e) => setLiveWindowSizeSeconds(Number(e.target.value))}
+                />
+              </div>
+              {liveDetectionMethod === "percentage" && (
+                <div>
+                  <label style={{ display: "block", fontWeight: 600 }}>Umbral (%)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    step={1}
+                    className="form-control"
+                    value={livePercentageThreshold}
+                    onChange={(e) => setLivePercentageThreshold(Number(e.target.value))}
+                  />
+                </div>
+              )}
+            </Card.Body>
+          </Card>
           <Alert
             variant="danger"
             style={{
