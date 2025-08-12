@@ -69,6 +69,7 @@ const PPEChart = ({
         personAppearances.set(pid, (personAppearances.get(pid) || 0) + 1);
         const counts = ppeCounts.get(pid) || { MASK: 0, HELMET: 0, LEFT_GLOVE: 0, RIGHT_GLOVE: 0 };
         ppeTypes.forEach((t) => {
+          // Count presence for compliance; we aggregate "present" rather than "missing"
           if (hasPPEInFrame(person, t)) counts[t] += 1;
         });
         ppeCounts.set(pid, counts);
@@ -81,6 +82,7 @@ const PPEChart = ({
       const presence = {};
       ppeTypes.forEach((t) => {
         const percent = (counts[t] / appearances) * 100;
+        // Compliance-based: any means any presence in window; percentage means percent of presence in window
         presence[t] = detectionMethod === "any" ? counts[t] > 0 : percent >= (Number(percentageThreshold) || 0);
       });
 

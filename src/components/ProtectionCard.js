@@ -55,7 +55,13 @@ const ProtectionCard = ({ person, webcamCoordinates }) => {
           <div style={{ marginTop: "10px" }}>
             {allRequiredPPE.map((required, index) => {
               const detected = detectedPPE[required.key];
-              const isPresent = detected !== undefined;
+              let isPresent = detected !== undefined;
+
+              // Live per-window presence override (if available)
+              const livePresence = person.ppeCompliance && person.ppeCompliance[required.key];
+              if (livePresence) {
+                isPresent = !!livePresence.present;
+              }
               
               return (
                 <div 
@@ -83,18 +89,32 @@ const ProtectionCard = ({ person, webcamCoordinates }) => {
                       <div style={{ color: "#155724" }}>
                         <strong>✅ Presente</strong>
                       </div>
-                      <div style={{ color: "#155724", fontSize: "0.8em" }}>
-                        Confianza: {detected.confidence}%
-                      </div>
-                      <div style={{ color: "#155724", fontSize: "0.8em" }}>
-                        Cubre parte: {detected.coversBodyPart ? "Sí" : "No"} ({detected.coversBodyPartConfidence}%)
-                      </div>
+                      {livePresence && (
+                        <div style={{ color: "#155724", fontSize: "0.8em" }}>
+                          Ventana: {Math.round(livePresence.percent)}% presente
+                        </div>
+                      )}
+                      {detected && (
+                        <>
+                          <div style={{ color: "#155724", fontSize: "0.8em" }}>
+                            Confianza: {detected.confidence}%
+                          </div>
+                          <div style={{ color: "#155724", fontSize: "0.8em" }}>
+                            Cubre parte: {detected.coversBodyPart ? "Sí" : "No"} ({detected.coversBodyPartConfidence}%)
+                          </div>
+                        </>
+                      )}
                     </div>
                   ) : (
-                    <div style={{ textAlign: "right", fontSize: "0.9em" }}>
+                     <div style={{ textAlign: "right", fontSize: "0.9em" }}>
                       <div style={{ color: "#721c24" }}>
                         <strong>❌ Faltante</strong>
                       </div>
+                      {livePresence && (
+                        <div style={{ color: "#721c24", fontSize: "0.8em" }}>
+                          Ventana: {Math.round(livePresence.percent)}% presente
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
