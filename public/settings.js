@@ -1,0 +1,1 @@
+window.rekognitionSettings = {"apiGateway":"https://79t83p2ank.execute-api.us-east-1.amazonaws.com/Prod/","cognitoIdentityPool":"us-east-1:94ffacca-6f37-46ae-834c-61e3fdcaf8ed","cognitoUserPoolId":"us-east-1_9rjyreAWl","cognitoUserPoolClientId":"1b126qo5qn1hrrfl13tf25ieaa","region":"us-east-1"};
